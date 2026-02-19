@@ -6588,6 +6588,13 @@ pub const Keybinds = struct {
             .toggle_command_palette,
         );
 
+        // URL hint mode
+        try self.set.put(
+            alloc,
+            .{ .key = .{ .unicode = 'u' }, .mods = inputpkg.ctrlOrSuper(.{ .shift = true }) },
+            .{ .open_url_hint = {} },
+        );
+
         // Mac-specific keyboard bindings.
         if (comptime builtin.target.os.tag.isDarwin()) {
             try self.set.put(

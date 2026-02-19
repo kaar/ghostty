@@ -26,6 +26,9 @@ inspector: ?*Inspector = null,
 /// a future exercise.
 preedit: ?Preedit = null,
 
+/// URL hint mode state for rendering hint labels over URLs.
+url_hints: ?[]const UrlHint = null,
+
 /// Mouse state. This only contains state relevant to what renderers
 /// need about the mouse.
 mouse: Mouse = .{},
@@ -120,4 +123,22 @@ pub const Preedit = struct {
             .cp_offset = cp_offset,
         };
     }
+};
+
+/// A single URL hint to render.
+pub const UrlHint = struct {
+    /// Hint label characters, e.g. "A\x00" or "AB".
+    label: [2]u8,
+    /// Length of the label (1 or 2).
+    label_len: u8,
+    /// Viewport x position where the hint label starts (also URL start).
+    x: terminalpkg.size.CellCountInt,
+    /// Viewport y position of the hint (URL start row).
+    y: terminalpkg.size.CellCountInt,
+    /// End x position of the URL.
+    end_x: terminalpkg.size.CellCountInt,
+    /// End y position of the URL.
+    end_y: terminalpkg.size.CellCountInt,
+    /// Whether this hint matches the currently typed prefix.
+    matched: bool,
 };

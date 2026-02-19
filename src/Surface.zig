@@ -165,6 +165,9 @@ command_timer: ?std.time.Instant = null,
 /// Search state
 search: ?Search = null,
 
+/// URL hint mode state
+url_hints: ?UrlHintState = null,
+
 /// Used to rate limit BEL handling.
 last_bell_time: ?std.time.Instant = null,
 
@@ -204,6 +207,36 @@ const Search = struct {
 
         // Now it is safe to deinit the state
         self.state.deinit();
+    }
+};
+
+/// URL hint mode state. When active, visible URLs are highlighted with
+/// short labels and keyboard input selects a URL to open.
+const UrlHintState = struct {
+    /// Each detected URL with its hint label and position.
+    hints: std.ArrayListUnmanaged(Hint) = .empty,
+    /// Characters typed so far to filter hints.
+    typed: std.ArrayListUnmanaged(u8) = .empty,
+
+    const Hint = struct {
+        /// Hint label, e.g. "A\x00" or "AB".
+        label: [2]u8,
+        /// Length of the label (1 or 2).
+        label_len: u8,
+        /// The URL string (allocated).
+        url: []const u8,
+        /// Viewport start position of the URL.
+        start: terminal.point.Coordinate,
+        /// Viewport end position of the URL.
+        end: terminal.point.Coordinate,
+    };
+
+    pub fn deinit(self: *UrlHintState, alloc: Allocator) void {
+        for (self.hints.items) |hint| {
+            alloc.free(hint.url);
+        }
+        self.hints.deinit(alloc);
+        self.typed.deinit(alloc);
     }
 };
 
@@ -771,6 +804,9 @@ pub fn deinit(self: *Surface) void {
     // Stop search thread
     if (self.search) |*s| s.deinit();
 
+    // Clean up URL hint state
+    if (self.url_hints) |*h| h.deinit(self.alloc);
+
     // Stop rendering thread
     {
         self.renderer_thread.stop.notify() catch |err|
@@ -810,6 +846,7 @@ pub fn deinit(self: *Surface) void {
 
     // Clean up our render state
     if (self.renderer_state.preedit) |p| self.alloc.free(p.codepoints);
+    if (self.renderer_state.url_hints) |h| self.alloc.free(h);
     self.alloc.destroy(self.renderer_state.mutex);
     self.config.deinit();
 
@@ -2432,6 +2469,9 @@ pub fn sizeCallback(self: *Surface, size: apprt.SurfaceSize) !void {
 }
 
 fn resize(self: *Surface, size: rendererpkg.ScreenSize) !void {
+    // Exit URL hint mode on resize since viewport positions change.
+    self.exitUrlHintMode();
+
     // Save our screen size
     self.size.screen = size;
     self.balancePaddingIfNeeded();
@@ -2636,6 +2676,14 @@ pub fn keyCallback(
             log.warn("error adding key event to inspector err={}", .{err});
         }
     };
+
+    // If URL hint mode is active, intercept input.
+    if (self.url_hints != null) {
+        if (event.action == .press or event.action == .repeat) {
+            if (try self.handleUrlHintInput(event)) return .consumed;
+        }
+        return .consumed;
+    }
 
     // Handle keybindings first. We need to handle this on all events
     // (press, repeat, release) because a press may perform a binding but
@@ -3255,6 +3303,9 @@ pub fn focusCallback(self: *Surface, focused: bool) !void {
     // If our focus state is the same we do nothing.
     if (self.focused == focused) return;
     self.focused = focused;
+
+    // Exit URL hint mode on focus loss.
+    if (!focused) self.exitUrlHintMode();
 
     // Notify our render thread of the new state
     _ = self.renderer_thread.mailbox.push(.{
@@ -4535,6 +4586,324 @@ fn openUrl(
     );
 }
 
+/// Handle keyboard input during URL hint mode.
+/// Returns true if the input was handled, false if hint mode should exit.
+fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
+    // Escape exits hint mode.
+    if (event.key == .escape) {
+        self.exitUrlHintMode();
+        return true;
+    }
+
+    // Backspace removes the last typed character.
+    if (event.key == .backspace) {
+        var hints = &self.url_hints.?;
+        if (hints.typed.items.len > 0) {
+            _ = hints.typed.pop();
+            {
+                self.renderer_state.mutex.lock();
+                defer self.renderer_state.mutex.unlock();
+                try self.syncUrlHintsToRenderer();
+            }
+            try self.queueRender();
+        } else {
+            self.exitUrlHintMode();
+        }
+        return true;
+    }
+
+    // Only handle letter keys (a-z / A-Z).
+    const ch: u8 = ch: {
+        if (event.utf8.len == 1) {
+            const c = event.utf8[0];
+            if (c >= 'a' and c <= 'z') break :ch c - 'a' + 'A';
+            if (c >= 'A' and c <= 'Z') break :ch c;
+        }
+        // Non-letter key: ignore but stay in hint mode.
+        return true;
+    };
+
+    var hints = &self.url_hints.?;
+    try hints.typed.append(self.alloc, ch);
+
+    // Check how many hints match the typed prefix.
+    var match_count: usize = 0;
+    var last_match_idx: usize = 0;
+    for (hints.hints.items, 0..) |hint, i| {
+        const label = hint.label[0..hint.label_len];
+        const typed = hints.typed.items;
+        if (typed.len > label.len) continue;
+        if (std.mem.eql(u8, label[0..typed.len], typed)) {
+            match_count += 1;
+            last_match_idx = i;
+        }
+    }
+
+    if (match_count == 1) {
+        // Exact or prefix match with only one candidate: open the URL.
+        const url = hints.hints.items[last_match_idx].url;
+
+        // Dupe the URL before exiting hint mode (which frees it).
+        const url_copy = try self.alloc.dupe(u8, url);
+        defer self.alloc.free(url_copy);
+
+        self.exitUrlHintMode();
+
+        try self.openUrl(.{ .kind = .unknown, .url = url_copy });
+        return true;
+    } else if (match_count == 0) {
+        // No matches: exit hint mode.
+        self.exitUrlHintMode();
+        return true;
+    }
+
+    // Multiple matches: wait for more input, trigger re-render.
+    {
+        self.renderer_state.mutex.lock();
+        defer self.renderer_state.mutex.unlock();
+        try self.syncUrlHintsToRenderer();
+    }
+    try self.queueRender();
+    return true;
+}
+
+/// Start URL hint mode: scan visible URLs and assign hint labels.
+fn startUrlHintMode(self: *Surface) void {
+    // If already in hint mode, exit first
+    if (self.url_hints) |*h| {
+        h.deinit(self.alloc);
+        self.url_hints = null;
+    }
+
+    self.startUrlHintModeInner() catch |err| {
+        log.warn("error starting URL hint mode err={}", .{err});
+    };
+}
+
+fn startUrlHintModeInner(self: *Surface) !void {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+
+    const t = self.renderer_state.terminal;
+    const screen: *terminal.Screen = t.screens.active;
+
+    var hints: std.ArrayListUnmanaged(UrlHintState.Hint) = .empty;
+    errdefer {
+        for (hints.items) |hint| self.alloc.free(hint.url);
+        hints.deinit(self.alloc);
+    }
+
+    // Create a selection covering the entire viewport.
+    const tl_pin = screen.pages.getTopLeft(.viewport);
+    const br_pin = screen.pages.getBottomRight(.viewport) orelse return;
+    const viewport_sel = terminal.Selection.init(tl_pin, br_pin, false);
+
+    // Get the viewport as a string with a pin map for coordinate lookups.
+    var strmap: terminal.StringMap = undefined;
+    const viewport_str = try screen.selectionString(self.alloc, .{
+        .sel = viewport_sel,
+        .trim = false,
+        .map = &strmap,
+    });
+    defer self.alloc.free(viewport_str);
+    defer strmap.deinit(self.alloc);
+
+    // Search with each configured link regex.
+    for (self.config.links) |link| {
+        // Only use open-action links (URL links).
+        switch (link.action) {
+            .open => {},
+            ._open_osc8 => continue,
+        }
+
+        var it = strmap.searchIterator(link.regex);
+        while (true) {
+            var match = (try it.next()) orelse break;
+            defer match.deinit();
+            const sel = match.selection();
+
+            // Get the matched URL string.
+            const url_str = try screen.selectionString(self.alloc, .{
+                .sel = sel,
+                .trim = false,
+            });
+
+            // Convert selection start/end pins to viewport coordinates.
+            const start_point = screen.pages.pointFromPin(.viewport, sel.start()) orelse continue;
+            const end_point = screen.pages.pointFromPin(.viewport, sel.end()) orelse continue;
+
+            try hints.append(self.alloc, .{
+                .label = undefined, // assigned below
+                .label_len = undefined,
+                .url = url_str,
+                .start = start_point.coord(),
+                .end = end_point.coord(),
+            });
+        }
+    }
+
+    // Also check for OSC8 hyperlinks in the viewport.
+    {
+        const cols = screen.pages.cols;
+        var pin = tl_pin;
+        var y: u32 = 0;
+        while (y < screen.pages.rows) : (y += 1) {
+            const page_data = &pin.node.data;
+            var x: terminal.size.CellCountInt = 0;
+            while (x < cols) {
+                const cell_pin: terminal.Pin = .{
+                    .node = pin.node,
+                    .x = x,
+                    .y = pin.y,
+                };
+                const rac = cell_pin.rowAndCell();
+                const cell = rac.cell;
+                if (!cell.hyperlink) {
+                    x += 1;
+                    continue;
+                }
+
+                const link_id = page_data.lookupHyperlink(cell) orelse {
+                    x += 1;
+                    continue;
+                };
+                const entry = page_data.hyperlink_set.get(page_data.memory, link_id);
+                const uri = entry.uri.slice(page_data.memory);
+
+                // Find the extent of this hyperlink.
+                const start_x = x;
+                x += 1;
+                while (x < cols) {
+                    const next_pin: terminal.Pin = .{
+                        .node = pin.node,
+                        .x = x,
+                        .y = pin.y,
+                    };
+                    const next_rac = next_pin.rowAndCell();
+                    if (!next_rac.cell.hyperlink) break;
+                    const next_id = page_data.lookupHyperlink(next_rac.cell) orelse break;
+                    if (next_id != link_id) break;
+                    x += 1;
+                }
+
+                try hints.append(self.alloc, .{
+                    .label = undefined,
+                    .label_len = undefined,
+                    .url = try self.alloc.dupe(u8, uri),
+                    .start = .{ .x = start_x, .y = y },
+                    .end = .{ .x = x -| 1, .y = y },
+                });
+            }
+
+            // Move to next row.
+            pin = pin.down(1) orelse break;
+        }
+    }
+
+    // If no URLs found, don't enter hint mode.
+    if (hints.items.len == 0) {
+        hints.deinit(self.alloc);
+        return;
+    }
+
+    // Sort by position for consistent label assignment.
+    std.mem.sort(UrlHintState.Hint, hints.items, {}, struct {
+        fn lessThan(_: void, a: UrlHintState.Hint, b: UrlHintState.Hint) bool {
+            if (a.start.y != b.start.y) return a.start.y < b.start.y;
+            return a.start.x < b.start.x;
+        }
+    }.lessThan);
+
+    // Remove duplicates (same start position).
+    {
+        var write_idx: usize = 0;
+        for (hints.items, 0..) |hint, i| {
+            if (i > 0 and hint.start.x == hints.items[write_idx - 1].start.x and
+                hint.start.y == hints.items[write_idx - 1].start.y)
+            {
+                self.alloc.free(hint.url);
+                continue;
+            }
+            hints.items[write_idx] = hint;
+            write_idx += 1;
+        }
+        hints.shrinkRetainingCapacity(write_idx);
+    }
+
+    // Assign labels: A-Z for first 26, then AA-ZZ.
+    for (hints.items, 0..) |*hint, i| {
+        if (i < 26) {
+            hint.label = .{ @intCast('A' + i), 0 };
+            hint.label_len = 1;
+        } else {
+            const idx = i - 26;
+            hint.label = .{
+                @intCast('A' + idx / 26),
+                @intCast('A' + idx % 26),
+            };
+            hint.label_len = 2;
+        }
+    }
+
+    self.url_hints = .{
+        .hints = hints,
+        .typed = .empty,
+    };
+
+    // Sync to renderer state (mutex already held).
+    try self.syncUrlHintsToRenderer();
+    try self.queueRender();
+}
+
+/// Exit URL hint mode, cleaning up state.
+fn exitUrlHintMode(self: *Surface) void {
+    if (self.url_hints) |*h| {
+        h.deinit(self.alloc);
+        self.url_hints = null;
+        {
+            self.renderer_state.mutex.lock();
+            defer self.renderer_state.mutex.unlock();
+            self.syncUrlHintsToRenderer() catch {};
+        }
+        self.queueRender() catch {};
+    }
+}
+
+/// Sync the URL hint state to the renderer state for display.
+fn syncUrlHintsToRenderer(self: *Surface) !void {
+    // Free previous renderer hints if any.
+    if (self.renderer_state.url_hints) |old| {
+        self.alloc.free(old);
+        self.renderer_state.url_hints = null;
+    }
+
+    const url_hints = self.url_hints orelse return;
+    const typed = url_hints.typed.items;
+
+    var renderer_hints: std.ArrayListUnmanaged(rendererpkg.State.UrlHint) = .empty;
+    defer renderer_hints.deinit(self.alloc);
+
+    for (url_hints.hints.items) |hint| {
+        const label = hint.label[0..hint.label_len];
+
+        // Determine if this hint matches the typed prefix.
+        const matched = typed.len == 0 or
+            (typed.len <= label.len and std.mem.eql(u8, label[0..typed.len], typed));
+
+        try renderer_hints.append(self.alloc, .{
+            .label = hint.label,
+            .label_len = hint.label_len,
+            .x = hint.start.x,
+            .y = @intCast(hint.start.y),
+            .end_x = hint.end.x,
+            .end_y = @intCast(hint.end.y),
+            .matched = matched,
+        });
+    }
+
+    self.renderer_state.url_hints = try renderer_hints.toOwnedSlice(self.alloc);
+}
+
 /// Return the URI for an OSC8 hyperlink at the given position or null
 /// if there is no hyperlink.
 fn osc8URI(self: *Surface, pin: terminal.Pin) ?[]const u8 {
@@ -5677,6 +6046,11 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
                 .readonly,
                 if (self.readonly) .on else .off,
             );
+            return true;
+        },
+
+        .open_url_hint => {
+            self.startUrlHintMode();
             return true;
         },
 
