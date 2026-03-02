@@ -4708,15 +4708,17 @@ fn startUrlHintModeInner(self: *Surface) !void {
     defer self.alloc.free(viewport_str);
     defer strmap.deinit(self.alloc);
 
-    // Search with each configured link regex.
-    for (self.config.links) |link| {
-        // Only use open-action links (URL links).
-        switch (link.action) {
-            .open => {},
-            ._open_osc8 => continue,
-        }
-
-        var it = strmap.searchIterator(link.regex);
+    // Search for scheme URLs only, no file paths.
+    {
+        var url_re = try oni.Regex.init(
+            configpkg.url.url_regex,
+            .{},
+            oni.Encoding.utf8,
+            oni.Syntax.default,
+            null,
+        );
+        defer url_re.deinit();
+        var it = strmap.searchIterator(url_re);
         while (true) {
             var match = (try it.next()) orelse break;
             defer match.deinit();
