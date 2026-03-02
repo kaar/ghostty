@@ -4709,6 +4709,8 @@ fn startUrlHintModeInner(self: *Surface) !void {
     defer strmap.deinit(self.alloc);
 
     // Search for scheme URLs only, no file paths.
+    // TODO: This is a hack to try to avoid file paths to be included in the URL hints
+    // Iterating over self.config.links included file paths and false positives like <html> tags.
     {
         var url_re = try oni.Regex.init(
             configpkg.url.url_regex,
