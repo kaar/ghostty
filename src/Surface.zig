@@ -36,6 +36,7 @@ const App = @import("App.zig");
 const internal_os = @import("os/main.zig");
 const inspectorpkg = @import("inspector/main.zig");
 const SurfaceMouse = @import("surface_mouse.zig");
+const SurfaceHintMode  = @import("surface_hint_mode.zig");
 
 const log = std.log.scoped(.surface);
 
@@ -4834,20 +4835,9 @@ fn startUrlHintModeInner(self: *Surface) !void {
         hints.shrinkRetainingCapacity(write_idx);
     }
 
-    // Assign labels: A-Z for first 26, then AA-ZZ.
-    for (hints.items, 0..) |*hint, i| {
-        if (i < 26) {
-            hint.label = .{ @intCast('A' + i), 0 };
-            hint.label_len = 1;
-        } else {
-            const idx = i - 26;
-            hint.label = .{
-                @intCast('A' + idx / 26),
-                @intCast('A' + idx % 26),
-            };
-            hint.label_len = 2;
-        }
-    }
+    // TODO: I would rather have it return a list of hints...
+    // This code really needs to be reviewed....
+    SurfaceHintMode.generate_labels(UrlHintState.Hint, hints.items);
 
     self.url_hints = .{
         .hints = hints,
