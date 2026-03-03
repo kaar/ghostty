@@ -2679,6 +2679,7 @@ pub fn keyCallback(
     };
 
     // If URL hint mode is active, intercept input.
+    // TODO: I'm not sure if this is the right spot...
     if (self.url_hints != null) {
         if (event.action == .press or event.action == .repeat) {
             if (try self.handleUrlHintInput(event)) return .consumed;
@@ -4588,84 +4589,68 @@ fn openUrl(
 }
 
 /// Handle keyboard input during URL hint mode.
-/// Returns true if the input was handled, false if hint mode should exit.
+/// Returns true if the input was handled.
 fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
-    // Escape exits hint mode.
-    if (event.key == .escape) {
-        self.exitUrlHintMode();
-        return true;
-    }
+    const mode = &self.url_hints.?;
 
-    // Backspace removes the last typed character.
-    if (event.key == .backspace) {
-        var hints = &self.url_hints.?;
-        if (hints.typed.items.len > 0) {
-            _ = hints.typed.pop();
-            {
-                self.renderer_state.mutex.lock();
-                defer self.renderer_state.mutex.unlock();
-                try self.syncUrlHintsToRenderer();
-            }
-            try self.queueRender();
-        } else {
+    switch (event.key) {
+        .escape => {
             self.exitUrlHintMode();
-        }
-        return true;
+            return true;
+        },
+        .backspace => {
+            if (mode.typed.items.len == 0) {
+                self.exitUrlHintMode();
+                return true;
+            }
+
+            _ = mode.typed.pop();
+            try self.updateUrlHintRender();
+            return true;
+        },
+        else => {},
     }
 
-    // Only handle letter keys (a-z / A-Z).
-    const ch: u8 = ch: {
-        if (event.utf8.len == 1) {
-            const c = event.utf8[0];
-            if (c >= 'a' and c <= 'z') break :ch c - 'a' + 'A';
-            if (c >= 'A' and c <= 'Z') break :ch c;
-        }
-        // Non-letter key: ignore but stay in hint mode.
-        return true;
-    };
+    if (event.utf8.len != 1) return true;
+    const ch = event.utf8[0];
+    if (ch < 'A' or ch > 'Z') return true;
 
-    var hints = &self.url_hints.?;
-    try hints.typed.append(self.alloc, ch);
+    const typed = mode.typed.items;
+    const candidate_len = typed.len + 1;
 
-    // Check how many hints match the typed prefix.
-    var match_count: usize = 0;
-    var last_match_idx: usize = 0;
-    for (hints.hints.items, 0..) |hint, i| {
-        const label = hint.label[0..hint.label_len];
-        const typed = hints.typed.items;
-        if (typed.len > label.len) continue;
-        if (std.mem.eql(u8, label[0..typed.len], typed)) {
-            match_count += 1;
-            last_match_idx = i;
-        }
+    var candidate: [2]u8 = undefined;
+    @memcpy(candidate[0..typed.len], typed);
+    candidate[typed.len] = ch;
+
+    switch (SurfaceHintMode.match_typed(
+        UrlHintState.Hint,
+        mode.hints.items,
+        candidate[0..candidate_len],
+    )) {
+        .none => return true,
+        .exact => |idx| {
+            const url_copy = try self.alloc.dupe(u8, mode.hints.items[idx].url);
+            defer self.alloc.free(url_copy);
+
+            self.exitUrlHintMode();
+            try self.openUrl(.{ .kind = .unknown, .url = uri });
+            return true;
+        },
+        .multiple => {
+            try mode.typed.append(self.alloc, ch);
+            try self.updateUrlHintRender();
+            return true;
+        },
     }
+}
 
-    if (match_count == 1) {
-        // Exact or prefix match with only one candidate: open the URL.
-        const url = hints.hints.items[last_match_idx].url;
 
-        // Dupe the URL before exiting hint mode (which frees it).
-        const url_copy = try self.alloc.dupe(u8, url);
-        defer self.alloc.free(url_copy);
+fn updateUrlHintRender(self: *Surface) !void {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
 
-        self.exitUrlHintMode();
-
-        try self.openUrl(.{ .kind = .unknown, .url = url_copy });
-        return true;
-    } else if (match_count == 0) {
-        // No matches: exit hint mode.
-        self.exitUrlHintMode();
-        return true;
-    }
-
-    // Multiple matches: wait for more input, trigger re-render.
-    {
-        self.renderer_state.mutex.lock();
-        defer self.renderer_state.mutex.unlock();
-        try self.syncUrlHintsToRenderer();
-    }
+    try self.syncUrlHintsToRenderer();
     try self.queueRender();
-    return true;
 }
 
 /// Start URL hint mode: scan visible URLs and assign hint labels.
