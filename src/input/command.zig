@@ -531,6 +531,12 @@ fn actionCommands(action: Action.Key) []const Command {
             .description = "Toggle read-only mode for the current surface.",
         }},
 
+        .toggle_url_hints => comptime &.{.{
+            .action = .toggle_url_hints,
+            .title = "Toggle URL Hints",
+            .description = "Highlight visible URLs with hint labels and open one by typing its label.",
+        }},
+
         .equalize_splits => comptime &.{.{
             .action = .equalize_splits,
             .title = "Equalize Splits",

@@ -504,3 +504,95 @@ test "url regex" {
         } else |_| {}
     }
 }
+
+
+/// URL-only regex: matches URLs with explicit schemes only (no file paths).
+/// Used by URL hint mode where only clickable URLs are desired.
+pub const url_regex = scheme_url_branch;
+
+test "url regex (urls only)" {
+    const testing = std.testing;
+
+    try oni.testing.ensureInit();
+    var re = try oni.Regex.init(
+        url_regex,
+        .{},
+        oni.Encoding.utf8,
+        oni.Syntax.default,
+        null,
+    );
+    defer re.deinit();
+
+    // Positive cases: scheme URLs that must match
+    const cases = [_]struct {
+        input: []const u8,
+        expect: []const u8,
+    }{
+        .{
+            .input = "hello https://example.com world",
+            .expect = "https://example.com",
+        },
+        .{
+            .input = "https://example.com/foo(bar) more",
+            .expect = "https://example.com/foo(bar)",
+        },
+        .{
+            .input = "Link inside (https://example.com) parens",
+            .expect = "https://example.com",
+        },
+        .{
+            .input = "Link period https://example.com. More text.",
+            .expect = "https://example.com",
+        },
+        .{
+            .input = "match http://example.com non-secure",
+            .expect = "http://example.com",
+        },
+        .{
+            .input = "match ftp://example.com ftp links",
+            .expect = "ftp://example.com",
+        },
+        .{
+            .input = "match ssh://example.com ssh links",
+            .expect = "ssh://example.com",
+        },
+        .{
+            .input = "match git://example.com git links",
+            .expect = "git://example.com",
+        },
+        .{
+            .input = "Serving HTTP on :: port 8000 (http://[::]:8000/)",
+            .expect = "http://[::]:8000/",
+        },
+        .{
+            .input = "IPv6 address https://[2001:db8::1]:8080/path",
+            .expect = "https://[2001:db8::1]:8080/path",
+        },
+    };
+
+    for (cases) |case| {
+        var reg = try re.search(case.input, .{});
+        defer reg.deinit();
+        const match = case.input[@intCast(reg.starts()[0])..@intCast(reg.ends()[0])];
+        try testing.expectEqualStrings(case.expect, match);
+    }
+
+    // Negative cases: file paths that must NOT match
+    const no_match_cases = [_][]const u8{
+        "~/ghostty",
+        "</h1>",
+        "/tmp/test.txt",
+        "./foo/bar.txt",
+        "../example.py",
+        "src/config/url.zig",
+        "$HOME/src/config/url.zig",
+        "foo/bar",
+    };
+    for (no_match_cases) |input| {
+        var result = re.search(input, .{});
+        if (result) |*reg| {
+            reg.deinit();
+            return error.TestUnexpectedResult;
+        } else |_| {}
+    }
+}

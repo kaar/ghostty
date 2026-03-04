@@ -36,6 +36,7 @@ const App = @import("App.zig");
 const internal_os = @import("os/main.zig");
 const inspectorpkg = @import("inspector/main.zig");
 const SurfaceMouse = @import("surface_mouse.zig");
+const SurfaceUrlHint = @import("surface_url_hint.zig");
 
 const log = std.log.scoped(.surface);
 
@@ -165,6 +166,9 @@ command_timer: ?std.time.Instant = null,
 /// Search state
 search: ?Search = null,
 
+/// URL hint mode state
+url_hints: ?UrlHintState = null,
+
 /// Used to rate limit BEL handling.
 last_bell_time: ?std.time.Instant = null,
 
@@ -204,6 +208,23 @@ const Search = struct {
 
         // Now it is safe to deinit the state
         self.state.deinit();
+    }
+};
+
+/// URL hint mode state. When active, visible URLs are highlighted with
+/// short labels and keyboard input selects a URL to open.
+const UrlHintState = struct {
+    /// Each detected URL with its hint label and position.
+    hints: std.ArrayListUnmanaged(SurfaceUrlHint.Hint) = .empty,
+    /// Characters typed so far to filter hints.
+    typed: std.ArrayListUnmanaged(u8) = .empty,
+
+    pub fn deinit(self: *UrlHintState, alloc: Allocator) void {
+        for (self.hints.items) |hint| {
+            alloc.free(hint.url);
+        }
+        self.hints.deinit(alloc);
+        self.typed.deinit(alloc);
     }
 };
 
@@ -771,6 +792,9 @@ pub fn deinit(self: *Surface) void {
     // Stop search thread
     if (self.search) |*s| s.deinit();
 
+    // Clean up URL hint state
+    if (self.url_hints) |*h| h.deinit(self.alloc);
+
     // Stop rendering thread
     {
         self.renderer_thread.stop.notify() catch |err|
@@ -810,6 +834,7 @@ pub fn deinit(self: *Surface) void {
 
     // Clean up our render state
     if (self.renderer_state.preedit) |p| self.alloc.free(p.codepoints);
+    if (self.renderer_state.url_hints) |h| self.alloc.free(h);
     self.alloc.destroy(self.renderer_state.mutex);
     self.config.deinit();
 
@@ -2432,6 +2457,9 @@ pub fn sizeCallback(self: *Surface, size: apprt.SurfaceSize) !void {
 }
 
 fn resize(self: *Surface, size: rendererpkg.ScreenSize) !void {
+    // Exit URL hint mode on resize since viewport positions change.
+    self.exitUrlHintMode();
+
     // Save our screen size
     self.size.screen = size;
     self.balancePaddingIfNeeded();
@@ -2636,6 +2664,15 @@ pub fn keyCallback(
             log.warn("error adding key event to inspector err={}", .{err});
         }
     };
+
+    // If URL hint mode is active, intercept input.
+    // TODO: I'm not sure if this is the right spot...
+    if (self.url_hints != null) {
+        if (event.action == .press or event.action == .repeat) {
+            if (try self.handleUrlHintInput(event)) return .consumed;
+        }
+        return .consumed;
+    }
 
     // Handle keybindings first. We need to handle this on all events
     // (press, repeat, release) because a press may perform a binding but
@@ -4535,6 +4572,217 @@ fn openUrl(
     );
 }
 
+/// Handle keyboard input during URL hint mode.
+/// Returns true if the input was handled.
+fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
+    const mode = &self.url_hints.?;
+
+    switch (event.key) {
+        .escape => {
+            self.exitUrlHintMode();
+            return true;
+        },
+        .backspace => {
+            if (mode.typed.items.len > 0) {
+                _ = mode.typed.pop();
+                try self.updateUrlHintRender();
+                return true;
+            }
+        },
+        else => {},
+    }
+
+    if (event.utf8.len != 1) return true;
+    const ch = std.ascii.toUpper(event.utf8[0]);
+    if (ch < 'A' or ch > 'Z') return true;
+
+    const typed = mode.typed.items;
+    if (typed.len >= 2) return true; // Max label length reached
+
+    var candidate: [2]u8 = undefined;
+    @memcpy(candidate[0..typed.len], typed);
+    candidate[typed.len] = ch;
+    const candidate_len = typed.len + 1;
+
+    switch (SurfaceUrlHint.matchTyped(
+        mode.hints.items,
+        candidate[0..candidate_len],
+    )) {
+        .none => return true,
+        .exact => |idx| {
+            const url_copy = try self.alloc.dupe(u8, mode.hints.items[idx].url);
+            defer self.alloc.free(url_copy);
+
+            self.exitUrlHintMode();
+            try self.openUrl(.{ .kind = .unknown, .url = url_copy });
+            return true;
+        },
+        .multiple => {
+            try mode.typed.append(self.alloc, ch);
+            try self.updateUrlHintRender();
+            return true;
+        },
+    }
+}
+
+fn updateUrlHintRender(self: *Surface) !void {
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+
+    try self.syncUrlHintsToRenderer();
+    try self.queueRender();
+}
+
+/// Toggle URL hint mode: scan visible URLs and assign hint labels,
+/// or exit if already in hint mode.
+fn toggleUrlHintMode(self: *Surface) void {
+    if (self.url_hints) |_| {
+        self.exitUrlHintMode();
+        return;
+    }
+
+    self.renderer_state.mutex.lock();
+    defer self.renderer_state.mutex.unlock();
+
+    const t = self.renderer_state.terminal;
+    const screen: *terminal.Screen = t.screens.active;
+
+    var hints: std.ArrayListUnmanaged(SurfaceUrlHint.Hint) = .empty;
+    errdefer {
+        for (hints.items) |hint| self.alloc.free(hint.url);
+        hints.deinit(self.alloc);
+    }
+
+    const tl_pin = screen.pages.getTopLeft(.viewport);
+    const br_pin = screen.pages.getBottomRight(.viewport) orelse return;
+    const viewport_sel = terminal.Selection.init(tl_pin, br_pin, false);
+
+    var strmap: terminal.StringMap = undefined;
+    const viewport_str = screen.selectionString(self.alloc, .{
+        .sel = viewport_sel,
+        .trim = false,
+        .map = &strmap,
+    }) catch |err| {
+        log.warn("error starting URL hint mode err={}", .{err});
+        return;
+    };
+    defer self.alloc.free(viewport_str);
+    defer strmap.deinit(self.alloc);
+
+    // Search for scheme URLs in the viewport text.
+    // TODO: Add support for OSC8 hyperlinks.
+    {
+        var url_re = oni.Regex.init(
+            configpkg.url.url_regex,
+            .{},
+            oni.Encoding.utf8,
+            oni.Syntax.default,
+            null,
+        ) catch |err| {
+            log.warn("error starting URL hint mode err={}", .{err});
+            return;
+        };
+        defer url_re.deinit();
+
+        var it = strmap.searchIterator(url_re);
+        while (true) {
+            var match = (it.next() catch |err| {
+                log.warn("error searching for URLs err={}", .{err});
+                break;
+            }) orelse break;
+            defer match.deinit();
+            const sel = match.selection();
+
+            const url_str = screen.selectionString(self.alloc, .{
+                .sel = sel,
+                .trim = false,
+            }) catch |err| {
+                log.warn("error extracting URL string err={}", .{err});
+                continue;
+            };
+
+            const start_point = screen.pages.pointFromPin(.viewport, sel.start()) orelse continue;
+            const coord = start_point.coord();
+
+            hints.append(self.alloc, .{
+                .label = undefined,
+                .url = url_str,
+                .x = coord.x,
+                .y = @intCast(coord.y),
+            }) catch |err| {
+                log.warn("error appending URL hint err={}", .{err});
+                self.alloc.free(url_str);
+                continue;
+            };
+        }
+    }
+
+    if (hints.items.len == 0) {
+        hints.deinit(self.alloc);
+        return;
+    }
+
+    SurfaceUrlHint.generateLabels(hints.items);
+
+    self.url_hints = .{
+        .hints = hints,
+        .typed = .empty,
+    };
+
+    self.syncUrlHintsToRenderer() catch |err| {
+        log.warn("error syncing URL hints to renderer err={}", .{err});
+    };
+    self.queueRender() catch {};
+}
+
+/// Exit URL hint mode, cleaning up state.
+fn exitUrlHintMode(self: *Surface) void {
+    if (self.url_hints) |*h| {
+        h.deinit(self.alloc);
+        self.url_hints = null;
+        {
+            self.renderer_state.mutex.lock();
+            defer self.renderer_state.mutex.unlock();
+            self.syncUrlHintsToRenderer() catch {};
+        }
+        self.queueRender() catch {};
+    }
+}
+
+/// Sync the URL hint state to the renderer state for display.
+/// Note: renderer_state.url_hints is owned by Surface and freed here
+/// and in Surface.deinit. The renderer copies via arena in drawFrame.
+fn syncUrlHintsToRenderer(self: *Surface) !void {
+    // Free previous renderer hints if any.
+    if (self.renderer_state.url_hints) |old| {
+        self.alloc.free(old);
+        self.renderer_state.url_hints = null;
+    }
+
+    const url_hints = self.url_hints orelse return;
+    const typed = url_hints.typed.items;
+
+    var renderer_hints: std.ArrayListUnmanaged(rendererpkg.State.UrlHint) = .empty;
+    defer renderer_hints.deinit(self.alloc);
+
+    for (url_hints.hints.items) |hint| {
+        const label = std.mem.sliceTo(&hint.label, 0);
+
+        // Determine if this hint matches the typed prefix.
+        const matched = typed.len == 0 or
+            (typed.len <= label.len and std.mem.eql(u8, label[0..typed.len], typed));
+
+        try renderer_hints.append(self.alloc, .{
+            .label = hint.label,
+            .x = hint.x,
+            .y = hint.y,
+            .matched = matched,
+        });
+    }
+
+    self.renderer_state.url_hints = try renderer_hints.toOwnedSlice(self.alloc);
+}
+
 /// Return the URI for an OSC8 hyperlink at the given position or null
 /// if there is no hyperlink.
 fn osc8URI(self: *Surface, pin: terminal.Pin) ?[]const u8 {
@@ -5677,6 +5925,11 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
                 .readonly,
                 if (self.readonly) .on else .off,
             );
+            return true;
+        },
+
+        .toggle_url_hints => {
+            self.toggleUrlHintMode();
             return true;
         },
 

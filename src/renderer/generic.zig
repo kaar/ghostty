@@ -17,6 +17,7 @@ const noMinContrast = cellpkg.noMinContrast;
 const constraintWidth = cellpkg.constraintWidth;
 const isCovering = cellpkg.isCovering;
 const rowNeverExtendBg = @import("row.zig").neverExtendBg;
+const urlHint = @import("url_hint.zig");
 const Overlay = @import("Overlay.zig");
 const imagepkg = @import("image.zig");
 const ImageState = imagepkg.State;
@@ -1144,6 +1145,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                 links: terminal.RenderState.CellSet,
                 mouse: renderer.State.Mouse,
                 preedit: ?renderer.State.Preedit,
+                url_hints: ?[]const renderer.State.UrlHint,
                 scrollbar: terminal.Scrollbar,
                 overlay_features: []const Overlay.Feature,
             };
@@ -1233,10 +1235,17 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     ) catch &.{};
                 };
 
+                // Get URL hint state
+                const url_hints: ?[]const renderer.State.UrlHint = url_hints: {
+                    const hints_src = state.url_hints orelse break :url_hints null;
+                    break :url_hints try arena_alloc.dupe(renderer.State.UrlHint, hints_src);
+                };
+
                 break :critical .{
                     .links = links,
                     .mouse = state.mouse,
                     .preedit = preedit,
+                    .url_hints = url_hints,
                     .scrollbar = scrollbar,
                     .overlay_features = overlay_features,
                 };
@@ -1332,6 +1341,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                         .blink_visible = cursor_blink_visible,
                     }),
                     &critical.links,
+                    critical.url_hints,
                 ) catch |err| {
                     // This means we weren't able to allocate our buffer
                     // to update the cells. In this case, we continue with
@@ -2264,6 +2274,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
             preedit: ?renderer.State.Preedit,
             cursor_style_: ?renderer.CursorStyle,
             links: *const terminal.RenderState.CellSet,
+            url_hints: ?[]const renderer.State.UrlHint,
         ) Allocator.Error!void {
             const state: *terminal.RenderState = &self.terminal_state;
 
@@ -2551,6 +2562,18 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
                     x += if (cp.wide) 2 else 1;
                 }
+            }
+
+            // Render URL hint labels.
+            if (url_hints) |hints| {
+                urlHint.renderHints(
+                    &self.cells,
+                    self.alloc,
+                    self.font_grid,
+                    self.grid_metrics,
+                    hints,
+                    state,
+                );
             }
 
             // Update that our cells rebuilt
