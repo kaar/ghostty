@@ -36,7 +36,7 @@ const App = @import("App.zig");
 const internal_os = @import("os/main.zig");
 const inspectorpkg = @import("inspector/main.zig");
 const SurfaceMouse = @import("surface_mouse.zig");
-const SurfaceHintMode  = @import("surface_hint_mode.zig");
+const SurfaceHintMode = @import("surface_hint_mode.zig");
 
 const log = std.log.scoped(.surface);
 
