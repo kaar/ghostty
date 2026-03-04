@@ -4677,14 +4677,46 @@ fn startUrlHintModeInner(self: *Surface) !void {
     defer self.alloc.free(viewport_str);
     defer strmap.deinit(self.alloc);
 
-    try SurfaceHintMode.collectRegexUrls(self.alloc, screen, &strmap, &hints);
+    // Search for scheme URLs in the viewport text.
+    // TODO: Add support for OSC8 hyperlinks.
+    {
+        var url_re = try oni.Regex.init(
+            configpkg.url.url_regex,
+            .{},
+            oni.Encoding.utf8,
+            oni.Syntax.default,
+            null,
+        );
+        defer url_re.deinit();
+
+        var it = strmap.searchIterator(url_re);
+        while (true) {
+            var match = (try it.next()) orelse break;
+            defer match.deinit();
+            const sel = match.selection();
+
+            const url_str = try screen.selectionString(self.alloc, .{
+                .sel = sel,
+                .trim = false,
+            });
+
+            const start_point = screen.pages.pointFromPin(.viewport, sel.start()) orelse continue;
+            const coord = start_point.coord();
+
+            try hints.append(self.alloc, .{
+                .label = undefined,
+                .url = url_str,
+                .x = coord.x,
+                .y = coord.y,
+            });
+        }
+    }
 
     if (hints.items.len == 0) {
         hints.deinit(self.alloc);
         return;
     }
 
-    SurfaceHintMode.sortAndDeduplicate(self.alloc, &hints);
     SurfaceHintMode.generate_labels(hints.items);
 
     self.url_hints = .{
@@ -4733,8 +4765,8 @@ fn syncUrlHintsToRenderer(self: *Surface) !void {
 
         try renderer_hints.append(self.alloc, .{
             .label = hint.label,
-            .x = hint.start.x,
-            .y = @intCast(hint.start.y),
+            .x = hint.x,
+            .y = @intCast(hint.y),
             .matched = matched,
         });
     }

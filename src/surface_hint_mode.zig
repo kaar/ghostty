@@ -73,10 +73,10 @@ pub fn generate_labels(items: []Hint) void {
 }
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
-const oni = @import("oniguruma");
-const terminal = @import("terminal/main.zig");
-const configpkg = @import("config.zig");
+
+fn makeTestHints(comptime n: usize) [n]Hint {
+    return .{Hint{ .label = .{ 0, 0 }, .url = "", .x = 0, .y = 0 }} ** n;
+}
 
 /// A detected URL hint with its label, URL string, and viewport position.
 pub const Hint = struct {
@@ -84,77 +84,11 @@ pub const Hint = struct {
     label: [2:0]u8,
     /// The URL string (allocated).
     url: []const u8,
-    /// Viewport position where the URL starts.
-    start: terminal.point.Coordinate,
+    /// Viewport column where the URL starts.
+    x: u16,
+    /// Viewport row where the URL starts.
+    y: u32,
 };
-
-/// Collect URLs matching the scheme regex from the viewport string map.
-pub fn collectRegexUrls(
-    alloc: Allocator,
-    screen: *terminal.Screen,
-    strmap: *terminal.StringMap,
-    hints: *std.ArrayListUnmanaged(Hint),
-) !void {
-    var url_re = try oni.Regex.init(
-        configpkg.url.url_regex,
-        .{},
-        oni.Encoding.utf8,
-        oni.Syntax.default,
-        null,
-    );
-    defer url_re.deinit();
-
-    var it = strmap.searchIterator(url_re);
-    while (true) {
-        var match = (try it.next()) orelse break;
-        defer match.deinit();
-        const sel = match.selection();
-
-        const url_str = try screen.selectionString(alloc, .{
-            .sel = sel,
-            .trim = false,
-        });
-
-        const start_point = screen.pages.pointFromPin(.viewport, sel.start()) orelse continue;
-
-        try hints.append(alloc, .{
-            .label = undefined,
-            .url = url_str,
-            .start = start_point.coord(),
-        });
-    }
-}
-
-// TODO: Add support for OSC8 hyperlinks in URL hint mode.
-// These are explicit hyperlinks embedded by applications via the OSC 8 escape
-// sequence and should be included alongside regex-matched URLs.
-
-/// Sort hints by position and remove duplicates at the same start coordinate.
-pub fn sortAndDeduplicate(alloc: Allocator, hints: *std.ArrayListUnmanaged(Hint)) void {
-    std.mem.sort(Hint, hints.items, {}, struct {
-        fn lessThan(_: void, a: Hint, b: Hint) bool {
-            if (a.start.y != b.start.y) return a.start.y < b.start.y;
-            return a.start.x < b.start.x;
-        }
-    }.lessThan);
-
-    var write_idx: usize = 0;
-    for (hints.items, 0..) |hint, i| {
-        if (i > 0 and hint.start.x == hints.items[write_idx - 1].start.x and
-            hint.start.y == hints.items[write_idx - 1].start.y)
-        {
-            alloc.free(hint.url);
-            continue;
-        }
-        hints.items[write_idx] = hint;
-        write_idx += 1;
-    }
-    hints.shrinkRetainingCapacity(write_idx);
-}
-
-fn makeTestHints(comptime n: usize) [n]Hint {
-    return .{Hint{ .label = .{ 0, 0 }, .url = "", .start = .{ .x = 0, .y = 0 } }} ** n;
-}
 
 test "zero items" {
     var items = makeTestHints(0);
