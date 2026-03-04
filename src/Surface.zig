@@ -4643,12 +4643,6 @@ fn startUrlHintMode(self: *Surface) void {
         self.url_hints = null;
     }
 
-    self.startUrlHintModeInner() catch |err| {
-        log.warn("error starting URL hint mode err={}", .{err});
-    };
-}
-
-fn startUrlHintModeInner(self: *Surface) !void {
     self.renderer_state.mutex.lock();
     defer self.renderer_state.mutex.unlock();
 
@@ -4666,46 +4660,62 @@ fn startUrlHintModeInner(self: *Surface) !void {
     const viewport_sel = terminal.Selection.init(tl_pin, br_pin, false);
 
     var strmap: terminal.StringMap = undefined;
-    const viewport_str = try screen.selectionString(self.alloc, .{
+    const viewport_str = screen.selectionString(self.alloc, .{
         .sel = viewport_sel,
         .trim = false,
         .map = &strmap,
-    });
+    }) catch |err| {
+        log.warn("error starting URL hint mode err={}", .{err});
+        return;
+    };
     defer self.alloc.free(viewport_str);
     defer strmap.deinit(self.alloc);
 
     // Search for scheme URLs in the viewport text.
     // TODO: Add support for OSC8 hyperlinks.
     {
-        var url_re = try oni.Regex.init(
+        var url_re = oni.Regex.init(
             configpkg.url.url_regex,
             .{},
             oni.Encoding.utf8,
             oni.Syntax.default,
             null,
-        );
+        ) catch |err| {
+            log.warn("error starting URL hint mode err={}", .{err});
+            return;
+        };
         defer url_re.deinit();
 
         var it = strmap.searchIterator(url_re);
         while (true) {
-            var match = (try it.next()) orelse break;
+            var match = (it.next() catch |err| {
+                log.warn("error searching for URLs err={}", .{err});
+                break;
+            }) orelse break;
             defer match.deinit();
             const sel = match.selection();
 
-            const url_str = try screen.selectionString(self.alloc, .{
+            const url_str = screen.selectionString(self.alloc, .{
                 .sel = sel,
                 .trim = false,
-            });
+            }) catch |err| {
+                log.warn("error extracting URL string err={}", .{err});
+                continue;
+            };
 
             const start_point = screen.pages.pointFromPin(.viewport, sel.start()) orelse continue;
             const coord = start_point.coord();
 
-            try hints.append(self.alloc, .{
+            hints.append(self.alloc, .{
                 .label = undefined,
                 .url = url_str,
                 .x = coord.x,
                 .y = @intCast(coord.y),
-            });
+            }) catch |err| {
+                log.warn("error appending URL hint err={}", .{err});
+                self.alloc.free(url_str);
+                continue;
+            };
         }
     }
 
@@ -4721,8 +4731,10 @@ fn startUrlHintModeInner(self: *Surface) !void {
         .typed = .empty,
     };
 
-    try self.syncUrlHintsToRenderer();
-    try self.queueRender();
+    self.syncUrlHintsToRenderer() catch |err| {
+        log.warn("error syncing URL hints to renderer err={}", .{err});
+    };
+    self.queueRender() catch {};
 }
 
 /// Exit URL hint mode, cleaning up state.
@@ -4740,6 +4752,8 @@ fn exitUrlHintMode(self: *Surface) void {
 }
 
 /// Sync the URL hint state to the renderer state for display.
+/// Note: renderer_state.url_hints is owned by Surface and freed here
+/// and in Surface.deinit. The renderer copies via arena in drawFrame.
 fn syncUrlHintsToRenderer(self: *Surface) !void {
     // Free previous renderer hints if any.
     if (self.renderer_state.url_hints) |old| {

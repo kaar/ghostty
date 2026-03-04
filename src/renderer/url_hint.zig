@@ -69,11 +69,11 @@ fn addCell(
         return;
     };
 
-    // Set a background for the hint cell: yellow if matched, dim gray if not.
+    // TODO: These colors are hardcoded. They should be derived from the
+    // terminal's color palette so they work with color themes.
     const bg_color: [4]u8 = if (matched) .{ 220, 180, 30, 255 } else .{ 80, 80, 80, 200 };
     cells.bgCell(coord.y, coord.x).* = bg_color;
 
-    // Foreground: dark text on yellow bg if matched, lighter if dimmed.
     const fg = if (matched)
         terminal.color.RGB{ .r = 30, .g = 30, .b = 30 }
     else
