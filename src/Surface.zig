@@ -4612,7 +4612,7 @@ fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
     }
 
     if (event.utf8.len != 1) return true;
-    const ch = event.utf8[0];
+    const ch = std.ascii.toUpper(event.utf8[0]);
     if (ch < 'A' or ch > 'Z') return true;
 
     const typed = mode.typed.items;
