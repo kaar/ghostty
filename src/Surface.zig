@@ -36,7 +36,7 @@ const App = @import("App.zig");
 const internal_os = @import("os/main.zig");
 const inspectorpkg = @import("inspector/main.zig");
 const SurfaceMouse = @import("surface_mouse.zig");
-const SurfaceHintMode = @import("surface_hint_mode.zig");
+const SurfaceUrlHint = @import("surface_url_hint.zig");
 
 const log = std.log.scoped(.surface);
 
@@ -215,7 +215,7 @@ const Search = struct {
 /// short labels and keyboard input selects a URL to open.
 const UrlHintState = struct {
     /// Each detected URL with its hint label and position.
-    hints: std.ArrayListUnmanaged(SurfaceHintMode.Hint) = .empty,
+    hints: std.ArrayListUnmanaged(SurfaceUrlHint.Hint) = .empty,
     /// Characters typed so far to filter hints.
     typed: std.ArrayListUnmanaged(u8) = .empty,
 
@@ -4606,7 +4606,7 @@ fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
     @memcpy(candidate[0..typed.len], typed);
     candidate[typed.len] = ch;
 
-    switch (SurfaceHintMode.match_typed(
+    switch (SurfaceUrlHint.matchTyped(
         mode.hints.items,
         candidate[0..candidate_len],
     )) {
@@ -4655,7 +4655,7 @@ fn startUrlHintModeInner(self: *Surface) !void {
     const t = self.renderer_state.terminal;
     const screen: *terminal.Screen = t.screens.active;
 
-    var hints: std.ArrayListUnmanaged(SurfaceHintMode.Hint) = .empty;
+    var hints: std.ArrayListUnmanaged(SurfaceUrlHint.Hint) = .empty;
     errdefer {
         for (hints.items) |hint| self.alloc.free(hint.url);
         hints.deinit(self.alloc);
@@ -4704,7 +4704,7 @@ fn startUrlHintModeInner(self: *Surface) !void {
                 .label = undefined,
                 .url = url_str,
                 .x = coord.x,
-                .y = coord.y,
+                .y = @intCast(coord.y),
             });
         }
     }
@@ -4714,7 +4714,7 @@ fn startUrlHintModeInner(self: *Surface) !void {
         return;
     }
 
-    SurfaceHintMode.generate_labels(hints.items);
+    SurfaceUrlHint.generateLabels(hints.items);
 
     self.url_hints = .{
         .hints = hints,
@@ -4763,7 +4763,7 @@ fn syncUrlHintsToRenderer(self: *Surface) !void {
         try renderer_hints.append(self.alloc, .{
             .label = hint.label,
             .x = hint.x,
-            .y = @intCast(hint.y),
+            .y = hint.y,
             .matched = matched,
         });
     }
