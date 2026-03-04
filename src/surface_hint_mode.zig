@@ -44,18 +44,12 @@ pub fn generate_labels(items: []Hint) void {
 
     if (count == 0) return;
 
-    // Determine how many single-char labels get consumed as prefixes
-    // for 2-char labels.
-    //
-    // Each prefix group replaces 1 single-char label with `alpha_len`
+    // Each prefix char replaces 1 single-char label with `alpha_len`
     // two-char labels, a net gain of (alpha_len - 1).
-    //
-    // count <= (alpha_len - prefixes) + prefixes * alpha_len
-    // Solving: prefixes = ceil((count - alpha_len) / (alpha_len - 1))
     const prefixes_needed: usize = if (count <= alpha_len)
         0
     else
-        (count - alpha_len + (alpha_len - 2)) / (alpha_len - 1);
+        std.math.divCeil(usize, count - alpha_len, alpha_len - 1) catch unreachable;
 
     // Assign labels. The first `prefixes_needed` label_alphabet entries become
     // prefixes for 2-char labels; the rest are standalone 1-char labels.
