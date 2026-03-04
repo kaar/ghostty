@@ -4869,8 +4869,6 @@ fn syncUrlHintsToRenderer(self: *Surface) !void {
             .label = hint.label,
             .x = hint.start.x,
             .y = @intCast(hint.start.y),
-            .end_x = hint.end.x,
-            .end_y = @intCast(hint.end.y),
             .matched = matched,
         });
     }

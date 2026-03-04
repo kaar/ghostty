@@ -129,14 +129,10 @@ pub const Preedit = struct {
 pub const UrlHint = struct {
     /// Hint label characters, e.g. "A" or "AB".
     label: [2:0]u8,
-    /// Viewport x position where the hint label starts (also URL start).
+    /// Viewport x position where the hint label starts.
     x: terminalpkg.size.CellCountInt,
-    /// Viewport y position of the hint (URL start row).
+    /// Viewport y position of the hint label.
     y: terminalpkg.size.CellCountInt,
-    /// End x position of the URL.
-    end_x: terminalpkg.size.CellCountInt,
-    /// End y position of the URL.
-    end_y: terminalpkg.size.CellCountInt,
     /// Whether this hint matches the currently typed prefix.
     matched: bool,
 };
