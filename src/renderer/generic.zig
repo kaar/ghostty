@@ -17,6 +17,7 @@ const noMinContrast = cellpkg.noMinContrast;
 const constraintWidth = cellpkg.constraintWidth;
 const isCovering = cellpkg.isCovering;
 const rowNeverExtendBg = @import("row.zig").neverExtendBg;
+const urlHintMode = @import("url_hint_mode.zig");
 const Overlay = @import("Overlay.zig");
 const imagepkg = @import("image.zig");
 const ImageState = imagepkg.State;
@@ -2565,22 +2566,14 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
             // Render URL hint labels.
             if (url_hints) |hints| {
-                for (hints) |hint| {
-                    const label = hint.label[0..hint.label_len];
-                    for (label, 0..) |ch, i| {
-                        self.addUrlHintCell(
-                            ch,
-                            .{
-                                .x = hint.x +| @as(terminal.size.CellCountInt, @intCast(i)),
-                                .y = hint.y,
-                            },
-                            hint.matched,
-                            state,
-                        ) catch |err| {
-                            log.warn("error building URL hint cell err={}", .{err});
-                        };
-                    }
-                }
+                urlHintMode.renderHints(
+                    &self.cells,
+                    self.alloc,
+                    self.font_grid,
+                    self.grid_metrics,
+                    hints,
+                    state,
+                );
             }
 
             // Update that our cells rebuilt
@@ -3293,58 +3286,6 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
                     @intCast(render.glyph.offset_y),
                 },
             }, cursor_style);
-        }
-
-        fn addUrlHintCell(
-            self: *Self,
-            ch: u8,
-            coord: terminal.Coordinate,
-            matched: bool,
-            state: *const terminal.RenderState,
-        ) !void {
-            // Bounds check
-            if (coord.x >= self.cells.size.columns or
-                @as(u32, coord.y) >= self.cells.size.rows)
-                return;
-
-            // Use a bold style for the hint label
-            const render_ = self.font_grid.renderCodepoint(
-                self.alloc,
-                @intCast(ch),
-                .bold,
-                .text,
-                .{ .grid_metrics = self.grid_metrics },
-            ) catch |err| {
-                log.warn("error rendering URL hint glyph err={}", .{err});
-                return;
-            };
-            const render = render_ orelse {
-                log.warn("failed to find font for URL hint char={c}", .{ch});
-                return;
-            };
-
-            // Set a background for the hint cell: yellow if matched, dim gray if not.
-            const bg_color: [4]u8 = if (matched) .{ 220, 180, 30, 255 } else .{ 80, 80, 80, 200 };
-            self.cells.bgCell(coord.y, coord.x).* = bg_color;
-
-            // Foreground: dark text on yellow bg if matched, lighter if dimmed.
-            const fg = if (matched)
-                terminal.color.RGB{ .r = 30, .g = 30, .b = 30 }
-            else
-                state.colors.foreground;
-
-            // Add the text glyph
-            try self.cells.add(self.alloc, .text, .{
-                .atlas = .grayscale,
-                .grid_pos = .{ @intCast(coord.x), @intCast(coord.y) },
-                .color = .{ fg.r, fg.g, fg.b, 255 },
-                .glyph_pos = .{ render.glyph.atlas_x, render.glyph.atlas_y },
-                .glyph_size = .{ render.glyph.width, render.glyph.height },
-                .bearings = .{
-                    @intCast(render.glyph.offset_x),
-                    @intCast(render.glyph.offset_y),
-                },
-            });
         }
 
         fn addPreeditCell(
