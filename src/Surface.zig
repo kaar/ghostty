@@ -4633,9 +4633,9 @@ fn updateUrlHintRender(self: *Surface) !void {
     try self.queueRender();
 }
 
-/// Start URL hint mode: scan visible URLs and assign hint labels.
-/// If already in hint mode, acts as a toggle and exits.
-fn startUrlHintMode(self: *Surface) void {
+/// Toggle URL hint mode: scan visible URLs and assign hint labels,
+/// or exit if already in hint mode.
+fn toggleUrlHintMode(self: *Surface) void {
     if (self.url_hints) |_| {
         self.exitUrlHintMode();
         return;
@@ -5929,7 +5929,7 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
         },
 
         .toggle_url_hints => {
-            self.startUrlHintMode();
+            self.toggleUrlHintMode();
             return true;
         },
 
