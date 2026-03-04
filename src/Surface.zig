@@ -224,10 +224,8 @@ const UrlHintState = struct {
         label: [2:0]u8,
         /// The URL string (allocated).
         url: []const u8,
-        /// Viewport start position of the URL.
+        /// Viewport position where the URL starts.
         start: terminal.point.Coordinate,
-        /// Viewport end position of the URL.
-        end: terminal.point.Coordinate,
     };
 
     pub fn deinit(self: *UrlHintState, alloc: Allocator) void {
@@ -4642,7 +4640,6 @@ fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
     }
 }
 
-
 fn updateUrlHintRender(self: *Surface) !void {
     self.renderer_state.mutex.lock();
     defer self.renderer_state.mutex.unlock();
@@ -4724,7 +4721,6 @@ fn startUrlHintModeInner(self: *Surface) !void {
                 .label = undefined, // assigned below
                 .url = url_str,
                 .start = start_point.coord(),
-                .end = end_point.coord(),
             });
         }
     }
@@ -4777,7 +4773,6 @@ fn startUrlHintModeInner(self: *Surface) !void {
                     .label = undefined,
                     .url = try self.alloc.dupe(u8, uri),
                     .start = .{ .x = start_x, .y = y },
-                    .end = .{ .x = x -| 1, .y = y },
                 });
             }
 
