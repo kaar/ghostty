@@ -4633,7 +4633,7 @@ fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
             defer self.alloc.free(url_copy);
 
             self.exitUrlHintMode();
-            try self.openUrl(.{ .kind = .unknown, .url = uri });
+            try self.openUrl(.{ .kind = .unknown, .url = url_copy });
             return true;
         },
         .multiple => {
