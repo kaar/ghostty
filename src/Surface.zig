@@ -4597,11 +4597,12 @@ fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
     if (ch < 'A' or ch > 'Z') return true;
 
     const typed = mode.typed.items;
-    const candidate_len = typed.len + 1;
+    if (typed.len >= 2) return true; // Max label length reached
 
     var candidate: [2]u8 = undefined;
     @memcpy(candidate[0..typed.len], typed);
     candidate[typed.len] = ch;
+    const candidate_len = typed.len + 1;
 
     switch (SurfaceUrlHint.matchTyped(
         mode.hints.items,
