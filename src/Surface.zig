@@ -4633,11 +4633,11 @@ fn updateUrlHintRender(self: *Surface) !void {
 }
 
 /// Start URL hint mode: scan visible URLs and assign hint labels.
+/// If already in hint mode, acts as a toggle and exits.
 fn startUrlHintMode(self: *Surface) void {
-    // If already in hint mode, exit first
-    if (self.url_hints) |*h| {
-        h.deinit(self.alloc);
-        self.url_hints = null;
+    if (self.url_hints) |_| {
+        self.exitUrlHintMode();
+        return;
     }
 
     self.renderer_state.mutex.lock();
