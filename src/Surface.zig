@@ -4713,9 +4713,8 @@ fn startUrlHintModeInner(self: *Surface) !void {
                 .trim = false,
             });
 
-            // Convert selection start/end pins to viewport coordinates.
+            // Convert selection start pin to viewport coordinate.
             const start_point = screen.pages.pointFromPin(.viewport, sel.start()) orelse continue;
-            const end_point = screen.pages.pointFromPin(.viewport, sel.end()) orelse continue;
 
             try hints.append(self.alloc, .{
                 .label = undefined, // assigned below
