@@ -3293,9 +3293,6 @@ pub fn focusCallback(self: *Surface, focused: bool) !void {
     if (self.focused == focused) return;
     self.focused = focused;
 
-    // Exit URL hint mode on focus loss.
-    if (!focused) self.exitUrlHintMode();
-
     // Notify our render thread of the new state
     _ = self.renderer_thread.mailbox.push(.{
         .focus = focused,
