@@ -6,9 +6,6 @@ pub const label_alphabet = "SADFJKLEWCMPGH";
 /// that typing any single character either selects a hint immediately or
 /// narrows to a group — never both.
 ///
-/// Generate unambiguous key combos, writing into any slice of structs
-/// with a `label: [2:0]u8` field.
-///
 /// With a 14-char alphabet, supports up to 14 + 14*14 = 210 labels.
 
 /// Result of matching a typed prefix against hint labels.
@@ -22,7 +19,7 @@ pub const MatchResult = union(enum) {
 };
 
 /// Check how many labels match the given typed prefix.
-pub fn match_typed(comptime T: type, items: []const T, typed: []const u8) MatchResult {
+pub fn match_typed(items: []const Hint, typed: []const u8) MatchResult {
     var match_count: usize = 0;
     var last_match_idx: usize = 0;
     for (items, 0..) |item, i| {
@@ -40,7 +37,7 @@ pub fn match_typed(comptime T: type, items: []const T, typed: []const u8) MatchR
     };
 }
 
-pub fn generate_labels(comptime T: type, items: []T) void {
+pub fn generate_labels(items: []Hint) void {
     const alpha = label_alphabet;
     const alpha_len = alpha.len;
     const count = items.len;
@@ -161,29 +158,25 @@ pub fn sortAndDeduplicate(alloc: Allocator, hints: *std.ArrayListUnmanaged(Hint)
     hints.shrinkRetainingCapacity(write_idx);
 }
 
-const TestItem = struct {
-    label: [2:0]u8,
-};
-
-fn makeTestItems(comptime n: usize) [n]TestItem {
-    return .{TestItem{ .label = .{ 0, 0 } }} ** n;
+fn makeTestHints(comptime n: usize) [n]Hint {
+    return .{Hint{ .label = .{ 0, 0 }, .url = "", .start = .{ .x = 0, .y = 0 } }} ** n;
 }
 
 test "zero items" {
-    var items = makeTestItems(0);
-    generate_labels(TestItem, &items);
+    var items = makeTestHints(0);
+    generate_labels(&items);
 }
 
 test "single item" {
-    var items = makeTestItems(1);
-    generate_labels(TestItem, &items);
+    var items = makeTestHints(1);
+    generate_labels(&items);
     try std.testing.expectEqualSlices(u8, "S", std.mem.sliceTo(&items[0].label, 0));
 }
 
 test "all single-char labels" {
     const alpha = label_alphabet;
-    var items = makeTestItems(alpha.len);
-    generate_labels(TestItem, &items);
+    var items = makeTestHints(alpha.len);
+    generate_labels(&items);
 
     for (items, 0..) |item, i| {
         try std.testing.expectEqualSlices(u8, alpha[i .. i + 1], std.mem.sliceTo(&item.label, 0));
@@ -193,8 +186,8 @@ test "all single-char labels" {
 test "one more than alphabet triggers two-char labels" {
     const alpha = label_alphabet;
     const count = alpha.len + 1;
-    var items = makeTestItems(count);
-    generate_labels(TestItem, &items);
+    var items = makeTestHints(count);
+    generate_labels(&items);
 
     // First prefix group: alpha_len two-char labels starting with alpha[0].
     for (0..alpha.len) |j| {
@@ -214,8 +207,8 @@ test "no ambiguity between single and multi-char labels" {
     const alpha = label_alphabet;
     // Use enough items to need multiple prefix groups.
     const count = alpha.len * 2;
-    var items = makeTestItems(count);
-    generate_labels(TestItem, &items);
+    var items = makeTestHints(count);
+    generate_labels(&items);
 
     // Collect all single-char labels.
     var single_chars: [alpha.len]u8 = undefined;
@@ -243,22 +236,22 @@ test "no ambiguity between single and multi-char labels" {
 }
 
 test "match_typed: empty typed matches all (multiple)" {
-    var items = makeTestItems(3);
-    generate_labels(TestItem, &items);
-    try std.testing.expectEqual(MatchResult.multiple, match_typed(TestItem, &items, ""));
+    var items = makeTestHints(3);
+    generate_labels(&items);
+    try std.testing.expectEqual(MatchResult.multiple, match_typed(&items, ""));
 }
 
 test "match_typed: single char exact match" {
-    var items = makeTestItems(1);
-    generate_labels(TestItem, &items);
+    var items = makeTestHints(1);
+    generate_labels(&items);
     // Single item gets label "S".
-    try std.testing.expectEqual(MatchResult{ .exact = 0 }, match_typed(TestItem, &items, "S"));
+    try std.testing.expectEqual(MatchResult{ .exact = 0 }, match_typed(&items, "S"));
 }
 
 test "match_typed: no match" {
-    var items = makeTestItems(3);
-    generate_labels(TestItem, &items);
-    try std.testing.expectEqual(MatchResult.none, match_typed(TestItem, &items, "Z"));
+    var items = makeTestHints(3);
+    generate_labels(&items);
+    try std.testing.expectEqual(MatchResult.none, match_typed(&items, "Z"));
 }
 
 test "match_typed: prefix narrows to multiple" {
@@ -266,17 +259,17 @@ test "match_typed: prefix narrows to multiple" {
     // 15 items: first alpha char becomes prefix for 14 two-char labels,
     // remaining 1 item gets a single-char label.
     const count = alpha.len + 1;
-    var items = makeTestItems(count);
-    generate_labels(TestItem, &items);
+    var items = makeTestHints(count);
+    generate_labels(&items);
     // Typing the first prefix char matches all 14 two-char labels.
-    try std.testing.expectEqual(MatchResult.multiple, match_typed(TestItem, &items, &.{alpha[0]}));
+    try std.testing.expectEqual(MatchResult.multiple, match_typed(&items, &.{alpha[0]}));
 }
 
 test "match_typed: full two-char label gives exact" {
     const alpha = label_alphabet;
     const count = alpha.len + 1;
-    var items = makeTestItems(count);
-    generate_labels(TestItem, &items);
+    var items = makeTestHints(count);
+    generate_labels(&items);
     // First two-char label is alpha[0] ++ alpha[0].
-    try std.testing.expectEqual(MatchResult{ .exact = 0 }, match_typed(TestItem, &items, &.{ alpha[0], alpha[0] }));
+    try std.testing.expectEqual(MatchResult{ .exact = 0 }, match_typed(&items, &.{ alpha[0], alpha[0] }));
 }

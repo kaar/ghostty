@@ -4610,7 +4610,6 @@ fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
     candidate[typed.len] = ch;
 
     switch (SurfaceHintMode.match_typed(
-        SurfaceHintMode.Hint,
         mode.hints.items,
         candidate[0..candidate_len],
     )) {
@@ -4686,7 +4685,7 @@ fn startUrlHintModeInner(self: *Surface) !void {
     }
 
     SurfaceHintMode.sortAndDeduplicate(self.alloc, &hints);
-    SurfaceHintMode.generate_labels(SurfaceHintMode.Hint, hints.items);
+    SurfaceHintMode.generate_labels(hints.items);
 
     self.url_hints = .{
         .hints = hints,
