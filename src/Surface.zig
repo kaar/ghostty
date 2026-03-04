@@ -4583,14 +4583,11 @@ fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
             return true;
         },
         .backspace => {
-            if (mode.typed.items.len == 0) {
-                self.exitUrlHintMode();
+            if (mode.typed.items.len > 0) {
+                _ = mode.typed.pop();
+                try self.updateUrlHintRender();
                 return true;
             }
-
-            _ = mode.typed.pop();
-            try self.updateUrlHintRender();
-            return true;
         },
         else => {},
     }
