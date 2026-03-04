@@ -215,18 +215,9 @@ const Search = struct {
 /// short labels and keyboard input selects a URL to open.
 const UrlHintState = struct {
     /// Each detected URL with its hint label and position.
-    hints: std.ArrayListUnmanaged(Hint) = .empty,
+    hints: std.ArrayListUnmanaged(SurfaceHintMode.Hint) = .empty,
     /// Characters typed so far to filter hints.
     typed: std.ArrayListUnmanaged(u8) = .empty,
-
-    const Hint = struct {
-        /// Hint label, e.g. "A" or "AB".
-        label: [2:0]u8,
-        /// The URL string (allocated).
-        url: []const u8,
-        /// Viewport position where the URL starts.
-        start: terminal.point.Coordinate,
-    };
 
     pub fn deinit(self: *UrlHintState, alloc: Allocator) void {
         for (self.hints.items) |hint| {
@@ -4619,7 +4610,7 @@ fn handleUrlHintInput(self: *Surface, event: input.KeyEvent) !bool {
     candidate[typed.len] = ch;
 
     switch (SurfaceHintMode.match_typed(
-        UrlHintState.Hint,
+        SurfaceHintMode.Hint,
         mode.hints.items,
         candidate[0..candidate_len],
     )) {
@@ -4668,18 +4659,16 @@ fn startUrlHintModeInner(self: *Surface) !void {
     const t = self.renderer_state.terminal;
     const screen: *terminal.Screen = t.screens.active;
 
-    var hints: std.ArrayListUnmanaged(UrlHintState.Hint) = .empty;
+    var hints: std.ArrayListUnmanaged(SurfaceHintMode.Hint) = .empty;
     errdefer {
         for (hints.items) |hint| self.alloc.free(hint.url);
         hints.deinit(self.alloc);
     }
 
-    // Create a selection covering the entire viewport.
     const tl_pin = screen.pages.getTopLeft(.viewport);
     const br_pin = screen.pages.getBottomRight(.viewport) orelse return;
     const viewport_sel = terminal.Selection.init(tl_pin, br_pin, false);
 
-    // Get the viewport as a string with a pin map for coordinate lookups.
     var strmap: terminal.StringMap = undefined;
     const viewport_str = try screen.selectionString(self.alloc, .{
         .sel = viewport_sel,
@@ -4689,137 +4678,21 @@ fn startUrlHintModeInner(self: *Surface) !void {
     defer self.alloc.free(viewport_str);
     defer strmap.deinit(self.alloc);
 
-    // Search for scheme URLs only, no file paths.
-    // TODO: This is a hack to try to avoid file paths to be included in the URL hints
-    // Iterating over self.config.links included file paths and false positives like <html> tags.
-    {
-        var url_re = try oni.Regex.init(
-            configpkg.url.url_regex,
-            .{},
-            oni.Encoding.utf8,
-            oni.Syntax.default,
-            null,
-        );
-        defer url_re.deinit();
-        var it = strmap.searchIterator(url_re);
-        while (true) {
-            var match = (try it.next()) orelse break;
-            defer match.deinit();
-            const sel = match.selection();
+    try SurfaceHintMode.collectRegexUrls(self.alloc, screen, &strmap, &hints);
 
-            // Get the matched URL string.
-            const url_str = try screen.selectionString(self.alloc, .{
-                .sel = sel,
-                .trim = false,
-            });
-
-            // Convert selection start pin to viewport coordinate.
-            const start_point = screen.pages.pointFromPin(.viewport, sel.start()) orelse continue;
-
-            try hints.append(self.alloc, .{
-                .label = undefined, // assigned below
-                .url = url_str,
-                .start = start_point.coord(),
-            });
-        }
-    }
-
-    // Also check for OSC8 hyperlinks in the viewport.
-    {
-        const cols = screen.pages.cols;
-        var pin = tl_pin;
-        var y: u32 = 0;
-        while (y < screen.pages.rows) : (y += 1) {
-            const page_data = &pin.node.data;
-            var x: terminal.size.CellCountInt = 0;
-            while (x < cols) {
-                const cell_pin: terminal.Pin = .{
-                    .node = pin.node,
-                    .x = x,
-                    .y = pin.y,
-                };
-                const rac = cell_pin.rowAndCell();
-                const cell = rac.cell;
-                if (!cell.hyperlink) {
-                    x += 1;
-                    continue;
-                }
-
-                const link_id = page_data.lookupHyperlink(cell) orelse {
-                    x += 1;
-                    continue;
-                };
-                const entry = page_data.hyperlink_set.get(page_data.memory, link_id);
-                const uri = entry.uri.slice(page_data.memory);
-
-                // Find the extent of this hyperlink.
-                const start_x = x;
-                x += 1;
-                while (x < cols) {
-                    const next_pin: terminal.Pin = .{
-                        .node = pin.node,
-                        .x = x,
-                        .y = pin.y,
-                    };
-                    const next_rac = next_pin.rowAndCell();
-                    if (!next_rac.cell.hyperlink) break;
-                    const next_id = page_data.lookupHyperlink(next_rac.cell) orelse break;
-                    if (next_id != link_id) break;
-                    x += 1;
-                }
-
-                try hints.append(self.alloc, .{
-                    .label = undefined,
-                    .url = try self.alloc.dupe(u8, uri),
-                    .start = .{ .x = start_x, .y = y },
-                });
-            }
-
-            // Move to next row.
-            pin = pin.down(1) orelse break;
-        }
-    }
-
-    // If no URLs found, don't enter hint mode.
     if (hints.items.len == 0) {
         hints.deinit(self.alloc);
         return;
     }
 
-    // Sort by position for consistent label assignment.
-    std.mem.sort(UrlHintState.Hint, hints.items, {}, struct {
-        fn lessThan(_: void, a: UrlHintState.Hint, b: UrlHintState.Hint) bool {
-            if (a.start.y != b.start.y) return a.start.y < b.start.y;
-            return a.start.x < b.start.x;
-        }
-    }.lessThan);
-
-    // Remove duplicates (same start position).
-    {
-        var write_idx: usize = 0;
-        for (hints.items, 0..) |hint, i| {
-            if (i > 0 and hint.start.x == hints.items[write_idx - 1].start.x and
-                hint.start.y == hints.items[write_idx - 1].start.y)
-            {
-                self.alloc.free(hint.url);
-                continue;
-            }
-            hints.items[write_idx] = hint;
-            write_idx += 1;
-        }
-        hints.shrinkRetainingCapacity(write_idx);
-    }
-
-    // TODO: I would rather have it return a list of hints...
-    // This code really needs to be reviewed....
-    SurfaceHintMode.generate_labels(UrlHintState.Hint, hints.items);
+    SurfaceHintMode.sortAndDeduplicate(self.alloc, &hints);
+    SurfaceHintMode.generate_labels(SurfaceHintMode.Hint, hints.items);
 
     self.url_hints = .{
         .hints = hints,
         .typed = .empty,
     };
 
-    // Sync to renderer state (mutex already held).
     try self.syncUrlHintsToRenderer();
     try self.queueRender();
 }
