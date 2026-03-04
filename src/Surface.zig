@@ -220,10 +220,8 @@ const UrlHintState = struct {
     typed: std.ArrayListUnmanaged(u8) = .empty,
 
     const Hint = struct {
-        /// Hint label, e.g. "A\x00" or "AB".
-        label: [2]u8,
-        /// Length of the label (1 or 2).
-        label_len: u8,
+        /// Hint label, e.g. "A" or "AB".
+        label: [2:0]u8,
         /// The URL string (allocated).
         url: []const u8,
         /// Viewport start position of the URL.
@@ -4724,7 +4722,6 @@ fn startUrlHintModeInner(self: *Surface) !void {
 
             try hints.append(self.alloc, .{
                 .label = undefined, // assigned below
-                .label_len = undefined,
                 .url = url_str,
                 .start = start_point.coord(),
                 .end = end_point.coord(),
@@ -4778,7 +4775,6 @@ fn startUrlHintModeInner(self: *Surface) !void {
 
                 try hints.append(self.alloc, .{
                     .label = undefined,
-                    .label_len = undefined,
                     .url = try self.alloc.dupe(u8, uri),
                     .start = .{ .x = start_x, .y = y },
                     .end = .{ .x = x -| 1, .y = y },
@@ -4863,7 +4859,7 @@ fn syncUrlHintsToRenderer(self: *Surface) !void {
     defer renderer_hints.deinit(self.alloc);
 
     for (url_hints.hints.items) |hint| {
-        const label = hint.label[0..hint.label_len];
+        const label = std.mem.sliceTo(&hint.label, 0);
 
         // Determine if this hint matches the typed prefix.
         const matched = typed.len == 0 or
@@ -4871,7 +4867,6 @@ fn syncUrlHintsToRenderer(self: *Surface) !void {
 
         try renderer_hints.append(self.alloc, .{
             .label = hint.label,
-            .label_len = hint.label_len,
             .x = hint.start.x,
             .y = @intCast(hint.start.y),
             .end_x = hint.end.x,

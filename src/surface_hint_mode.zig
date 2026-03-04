@@ -7,9 +7,10 @@ pub const label_alphabet = "SADFJKLEWCMPGH";
 /// narrows to a group — never both.
 ///
 /// Generate unambiguous key combos, writing into any slice of structs
-/// with `label: [2]u8` and `label_len: u8` fields.
+/// with a `label: [2:0]u8` field.
 ///
 /// With a 14-char alphabet, supports up to 14 + 14*14 = 210 labels.
+
 /// Result of matching a typed prefix against hint labels.
 pub const MatchResult = union(enum) {
     /// No hints match the typed prefix.
@@ -25,7 +26,7 @@ pub fn match_typed(comptime T: type, items: []const T, typed: []const u8) MatchR
     var match_count: usize = 0;
     var last_match_idx: usize = 0;
     for (items, 0..) |item, i| {
-        const label = item.label[0..item.label_len];
+        const label = std.mem.sliceTo(&item.label, 0);
         if (typed.len > label.len) continue;
         if (std.mem.eql(u8, label[0..typed.len], typed)) {
             match_count += 1;
@@ -70,13 +71,11 @@ pub fn generate_labels(comptime T: type, items: []T) void {
             for (0..alpha_len) |j| {
                 if (idx >= count) break;
                 items[idx].label = .{ alpha[i], alpha[j] };
-                items[idx].label_len = 2;
                 idx += 1;
             }
         } else {
             // Standalone single-char label.
             items[idx].label = .{ alpha[i], 0 };
-            items[idx].label_len = 1;
             idx += 1;
         }
     }
@@ -85,12 +84,11 @@ pub fn generate_labels(comptime T: type, items: []T) void {
 const std = @import("std");
 
 const TestItem = struct {
-    label: [2]u8,
-    label_len: u8,
+    label: [2:0]u8,
 };
 
 fn makeTestItems(comptime n: usize) [n]TestItem {
-    return .{.{ .label = .{ 0, 0 }, .label_len = 0 }} ** n;
+    return .{TestItem{ .label = .{ 0, 0 } }} ** n;
 }
 
 test "zero items" {
@@ -101,8 +99,7 @@ test "zero items" {
 test "single item" {
     var items = makeTestItems(1);
     generate_labels(TestItem, &items);
-    try std.testing.expectEqual(@as(u8, 1), items[0].label_len);
-    try std.testing.expectEqual(@as(u8, 'S'), items[0].label[0]);
+    try std.testing.expectEqualSlices(u8, "S", std.mem.sliceTo(&items[0].label, 0));
 }
 
 test "all single-char labels" {
@@ -111,8 +108,7 @@ test "all single-char labels" {
     generate_labels(TestItem, &items);
 
     for (items, 0..) |item, i| {
-        try std.testing.expectEqual(@as(u8, 1), item.label_len);
-        try std.testing.expectEqual(alpha[i], item.label[0]);
+        try std.testing.expectEqualSlices(u8, alpha[i .. i + 1], std.mem.sliceTo(&item.label, 0));
     }
 }
 
@@ -124,14 +120,15 @@ test "one more than alphabet triggers two-char labels" {
 
     // First prefix group: alpha_len two-char labels starting with alpha[0].
     for (0..alpha.len) |j| {
-        try std.testing.expectEqual(@as(u8, 2), items[j].label_len);
-        try std.testing.expectEqual(alpha[0], items[j].label[0]);
-        try std.testing.expectEqual(alpha[j], items[j].label[1]);
+        const label = std.mem.sliceTo(&items[j].label, 0);
+        try std.testing.expectEqual(@as(usize, 2), label.len);
+        try std.testing.expectEqual(alpha[0], label[0]);
+        try std.testing.expectEqual(alpha[j], label[1]);
     }
 
     // Remaining labels are single-char.
     for (alpha.len..count) |i| {
-        try std.testing.expectEqual(@as(u8, 1), items[i].label_len);
+        try std.testing.expectEqual(@as(usize, 1), std.mem.sliceTo(&items[i].label, 0).len);
     }
 }
 
@@ -146,18 +143,20 @@ test "no ambiguity between single and multi-char labels" {
     var single_chars: [alpha.len]u8 = undefined;
     var single_count: usize = 0;
     for (items) |item| {
-        if (item.label_len == 1) {
-            single_chars[single_count] = item.label[0];
+        const label = std.mem.sliceTo(&item.label, 0);
+        if (label.len == 1) {
+            single_chars[single_count] = label[0];
             single_count += 1;
         }
     }
 
     // Verify no two-char label starts with any single-char label.
     for (items) |item| {
-        if (item.label_len == 2) {
+        const label = std.mem.sliceTo(&item.label, 0);
+        if (label.len == 2) {
             for (single_chars[0..single_count]) |sc| {
-                if (item.label[0] == sc) {
-                    std.debug.print("Ambiguity: single-char '{c}' is prefix of two-char '{c}{c}'\n", .{ sc, item.label[0], item.label[1] });
+                if (label[0] == sc) {
+                    std.debug.print("Ambiguity: single-char '{c}' is prefix of two-char '{c}{c}'\n", .{ sc, label[0], label[1] });
                     return error.TestUnexpectedResult;
                 }
             }

@@ -4,7 +4,6 @@ const font = @import("../font/main.zig");
 const terminal = @import("../terminal/main.zig");
 const renderer = @import("../renderer.zig");
 const cellpkg = @import("cell.zig");
-
 const log = std.log.scoped(.url_hint);
 
 /// Render all URL hint labels over the terminal grid.
@@ -17,7 +16,7 @@ pub fn renderHints(
     state: *const terminal.RenderState,
 ) void {
     for (hints) |hint| {
-        const label = hint.label[0..hint.label_len];
+        const label = std.mem.sliceTo(&hint.label, 0);
         for (label, 0..) |ch, i| {
             addCell(
                 cells,

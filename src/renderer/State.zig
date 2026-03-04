@@ -127,10 +127,8 @@ pub const Preedit = struct {
 
 /// A single URL hint to render.
 pub const UrlHint = struct {
-    /// Hint label characters, e.g. "A\x00" or "AB".
-    label: [2]u8,
-    /// Length of the label (1 or 2).
-    label_len: u8,
+    /// Hint label characters, e.g. "A" or "AB".
+    label: [2:0]u8,
     /// Viewport x position where the hint label starts (also URL start).
     x: terminalpkg.size.CellCountInt,
     /// Viewport y position of the hint (URL start row).
