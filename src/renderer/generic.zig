@@ -17,7 +17,7 @@ const noMinContrast = cellpkg.noMinContrast;
 const constraintWidth = cellpkg.constraintWidth;
 const isCovering = cellpkg.isCovering;
 const rowNeverExtendBg = @import("row.zig").neverExtendBg;
-const urlHintMode = @import("url_hint_mode.zig");
+const urlHint = @import("url_hint.zig");
 const Overlay = @import("Overlay.zig");
 const imagepkg = @import("image.zig");
 const ImageState = imagepkg.State;
@@ -2566,7 +2566,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
 
             // Render URL hint labels.
             if (url_hints) |hints| {
-                urlHintMode.renderHints(
+                urlHint.renderHints(
                     &self.cells,
                     self.alloc,
                     self.font_grid,
