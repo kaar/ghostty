@@ -621,10 +621,10 @@ pub const Action = union(enum) {
     ///     process is not running
     toggle_readonly,
 
-    /// Enter URL hint mode. All visible URLs are detected and assigned
+    /// Toggle URL hint mode. All visible URLs are detected and assigned
     /// short hint labels (e.g. "A", "B", "AB"). Typing the hint label
     /// opens the corresponding URL. Press Escape to exit without action.
-    open_url_hint,
+    toggle_url_hints,
 
     /// Resize the current split in the specified direction and amount in
     /// pixels. The two arguments should be joined with a comma (`,`),
@@ -1384,7 +1384,7 @@ pub const Action = union(enum) {
             .goto_window,
             .toggle_split_zoom,
             .toggle_readonly,
-            .open_url_hint,
+            .toggle_url_hints,
             .resize_split,
             .equalize_splits,
             .inspector,

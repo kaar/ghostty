@@ -5916,7 +5916,7 @@ pub fn performBindingAction(self: *Surface, action: input.Binding.Action) !bool 
             return true;
         },
 
-        .open_url_hint => {
+        .toggle_url_hints => {
             self.startUrlHintMode();
             return true;
         },

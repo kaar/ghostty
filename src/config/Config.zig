@@ -6592,7 +6592,7 @@ pub const Keybinds = struct {
         try self.set.put(
             alloc,
             .{ .key = .{ .unicode = 'u' }, .mods = inputpkg.ctrlOrSuper(.{ .shift = true }) },
-            .{ .open_url_hint = {} },
+            .{ .toggle_url_hints = {} },
         );
 
         // Mac-specific keyboard bindings.
