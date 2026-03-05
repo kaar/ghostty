@@ -35,17 +35,20 @@ pub const MatchResult = union(enum) {
     multiple,
 };
 
-/// Home-row-friendly alphabet for hint labels (from foot terminal).
-pub const label_alphabet = "SADFJKLEWCMPGH";
+/// Default home-row-friendly alphabet for hint labels (from foot terminal).
+pub const default_alphabet = "SADFJKLEWCMPGH";
 
 /// Assign short labels to each hint using a BFS-style expansion algorithm.
+///
+/// The `alphabet` parameter specifies the characters to use for labels.
+/// If it has fewer than 2 characters, the default alphabet is used.
 ///
 /// The first `prefixes_needed` characters of the alphabet are consumed as
 /// prefixes for two-character labels; the remaining characters become
 /// standalone single-character labels. This ensures no ambiguity between
 /// single-char and multi-char labels.
-pub fn generateLabels(items: []Hint) void {
-    const alpha = label_alphabet;
+pub fn generateLabels(items: []Hint, alphabet: []const u8) void {
+    const alpha = if (alphabet.len >= 2) alphabet else default_alphabet;
     const alpha_len = alpha.len;
     const count = items.len;
 
@@ -105,19 +108,19 @@ fn makeTestHints(comptime n: usize) [n]Hint {
 
 test "generateLabels: zero items" {
     var items = makeTestHints(0);
-    generateLabels(&items);
+    generateLabels(&items, default_alphabet);
 }
 
 test "generateLabels: single item" {
     var items = makeTestHints(1);
-    generateLabels(&items);
+    generateLabels(&items, default_alphabet);
     try testing.expectEqualSlices(u8, "S", std.mem.sliceTo(&items[0].label, 0));
 }
 
 test "generateLabels: all single-char labels" {
-    const alpha = label_alphabet;
+    const alpha = default_alphabet;
     var items = makeTestHints(alpha.len);
-    generateLabels(&items);
+    generateLabels(&items, alpha);
 
     for (items, 0..) |item, i| {
         try testing.expectEqualSlices(u8, alpha[i .. i + 1], std.mem.sliceTo(&item.label, 0));
@@ -125,10 +128,10 @@ test "generateLabels: all single-char labels" {
 }
 
 test "generateLabels: one more than alphabet triggers two-char labels" {
-    const alpha = label_alphabet;
+    const alpha = default_alphabet;
     const count = alpha.len + 1;
     var items = makeTestHints(count);
-    generateLabels(&items);
+    generateLabels(&items, alpha);
 
     // First prefix group: alpha_len two-char labels starting with alpha[0].
     for (0..alpha.len) |j| {
@@ -145,11 +148,11 @@ test "generateLabels: one more than alphabet triggers two-char labels" {
 }
 
 test "generateLabels: no ambiguity between single and multi-char labels" {
-    const alpha = label_alphabet;
+    const alpha = default_alphabet;
     // Use enough items to need multiple prefix groups.
     const count = alpha.len * 2;
     var items = makeTestHints(count);
-    generateLabels(&items);
+    generateLabels(&items, alpha);
 
     // Collect all single-char labels.
     var single_chars: [alpha.len]u8 = undefined;
@@ -173,37 +176,58 @@ test "generateLabels: no ambiguity between single and multi-char labels" {
     }
 }
 
+test "generateLabels: custom alphabet" {
+    const alpha = "AB";
+    var items = makeTestHints(3);
+    generateLabels(&items, alpha);
+
+    // With 2-char alphabet and 3 items: need 1 prefix.
+    // Prefix "A" produces: AA, AB. Standalone: B.
+    try testing.expectEqualSlices(u8, "AA", std.mem.sliceTo(&items[0].label, 0));
+    try testing.expectEqualSlices(u8, "AB", std.mem.sliceTo(&items[1].label, 0));
+    try testing.expectEqualSlices(u8, "B", std.mem.sliceTo(&items[2].label, 0));
+}
+
+test "generateLabels: short alphabet falls back to default" {
+    var items = makeTestHints(1);
+    generateLabels(&items, "");
+    try testing.expectEqualSlices(u8, "S", std.mem.sliceTo(&items[0].label, 0));
+
+    generateLabels(&items, "X");
+    try testing.expectEqualSlices(u8, "S", std.mem.sliceTo(&items[0].label, 0));
+}
+
 test "matchTyped: empty typed matches all (multiple)" {
     var items = makeTestHints(3);
-    generateLabels(&items);
+    generateLabels(&items, default_alphabet);
     try testing.expectEqual(MatchResult.multiple, matchTyped(&items, ""));
 }
 
 test "matchTyped: single char exact match" {
     var items = makeTestHints(1);
-    generateLabels(&items);
+    generateLabels(&items, default_alphabet);
     try testing.expectEqual(MatchResult{ .exact = 0 }, matchTyped(&items, "S"));
 }
 
 test "matchTyped: no match" {
     var items = makeTestHints(3);
-    generateLabels(&items);
+    generateLabels(&items, default_alphabet);
     try testing.expectEqual(MatchResult.none, matchTyped(&items, "Z"));
 }
 
 test "matchTyped: prefix narrows to multiple" {
-    const alpha = label_alphabet;
+    const alpha = default_alphabet;
     const count = alpha.len + 1;
     var items = makeTestHints(count);
-    generateLabels(&items);
+    generateLabels(&items, alpha);
     // Typing the first prefix char matches all 14 two-char labels.
     try testing.expectEqual(MatchResult.multiple, matchTyped(&items, &.{alpha[0]}));
 }
 
 test "matchTyped: full two-char label gives exact" {
-    const alpha = label_alphabet;
+    const alpha = default_alphabet;
     const count = alpha.len + 1;
     var items = makeTestHints(count);
-    generateLabels(&items);
+    generateLabels(&items, alpha);
     try testing.expectEqual(MatchResult{ .exact = 0 }, matchTyped(&items, &.{ alpha[0], alpha[0] }));
 }

@@ -351,6 +351,7 @@ const DerivedConfig = struct {
     title_report: bool,
     links: []DerivedConfig.Link,
     link_previews: configpkg.LinkPreviews,
+    url_hint_alphabet: []const u8,
     scroll_to_bottom: configpkg.Config.ScrollToBottom,
     notify_on_command_finish: configpkg.Config.NotifyOnCommandFinish,
     notify_on_command_finish_action: configpkg.Config.NotifyOnCommandFinishAction,
@@ -428,6 +429,7 @@ const DerivedConfig = struct {
             .title_report = config.@"title-report",
             .links = links,
             .link_previews = config.@"link-previews",
+            .url_hint_alphabet = config.@"url-hint-alphabet",
             .scroll_to_bottom = config.@"scroll-to-bottom",
             .notify_on_command_finish = config.@"notify-on-command-finish",
             .notify_on_command_finish_action = config.@"notify-on-command-finish-action",
@@ -4669,8 +4671,11 @@ fn toggleUrlHintMode(self: *Surface) void {
     defer self.alloc.free(viewport_str);
     defer strmap.deinit(self.alloc);
 
+    // Track seen URLs to deduplicate across regex and OSC8 results.
+    var seen_urls: std.StringHashMapUnmanaged(void) = .empty;
+    defer seen_urls.deinit(self.alloc);
+
     // Search for scheme URLs in the viewport text.
-    // TODO: Add support for OSC8 hyperlinks.
     {
         var url_re = oni.Regex.init(
             configpkg.url.url_regex,
@@ -4714,6 +4719,52 @@ fn toggleUrlHintMode(self: *Surface) void {
                 self.alloc.free(url_str);
                 continue;
             };
+            seen_urls.put(self.alloc, url_str, {}) catch {};
+        }
+    }
+
+    // Scan viewport cells for OSC8 hyperlinks not found by regex.
+    {
+        var row_pin = tl_pin;
+        var viewport_y: u16 = 0;
+        while (viewport_y < screen.pages.rows) : (viewport_y += 1) {
+            const rac = row_pin.rowAndCell();
+            if (rac.row.hyperlink) {
+                const row_cells = row_pin.node.data.getCells(rac.row);
+                for (row_cells, 0..) |*cell, col_idx| {
+                    if (!cell.hyperlink) continue;
+                    const cell_pin = terminal.Pin{
+                        .node = row_pin.node,
+                        .y = row_pin.y,
+                        .x = @intCast(col_idx),
+                    };
+                    const uri = self.osc8URI(cell_pin) orelse continue;
+
+                    // Skip if we already have this URL.
+                    if (seen_urls.contains(uri)) continue;
+
+                    const url_str = self.alloc.dupe(u8, uri) catch continue;
+
+                    hints.append(self.alloc, .{
+                        .label = undefined,
+                        .url = url_str,
+                        .x = @intCast(col_idx),
+                        .y = viewport_y,
+                    }) catch {
+                        self.alloc.free(url_str);
+                        continue;
+                    };
+                    seen_urls.put(self.alloc, url_str, {}) catch {};
+                }
+            }
+
+            // Move to next row.
+            if (viewport_y + 1 < screen.pages.rows) {
+                row_pin = switch (row_pin.downOverflow(1)) {
+                    .offset => |p| p,
+                    .overflow => break,
+                };
+            }
         }
     }
 
@@ -4722,7 +4773,7 @@ fn toggleUrlHintMode(self: *Surface) void {
         return;
     }
 
-    SurfaceUrlHint.generateLabels(hints.items);
+    SurfaceUrlHint.generateLabels(hints.items, self.config.url_hint_alphabet);
 
     self.url_hints = .{
         .hints = hints,

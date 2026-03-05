@@ -1417,6 +1417,16 @@ link: RepeatableLink = .{},
 /// Available since: 1.2.0
 @"link-previews": LinkPreviews = .true,
 
+/// Characters to use for URL hint mode labels. When URL hint mode is
+/// activated, each detected URL is assigned a short label drawn from
+/// this alphabet. Shorter alphabets produce longer labels when many
+/// URLs are visible; longer alphabets keep labels short. The default
+/// uses home-row-friendly characters from the QWERTY layout.
+///
+/// The string must contain at least 2 unique uppercase ASCII letters
+/// (A-Z). Duplicate characters are ignored.
+@"url-hint-alphabet": []const u8 = "SADFJKLEWCMPGH",
+
 /// Whether to start the window in a maximized state. This setting applies
 /// to new windows and does not apply to tabs, splits, etc. However, this setting
 /// will apply to all new windows, not just the first one.
